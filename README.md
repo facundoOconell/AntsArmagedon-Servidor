@@ -1,7 +1,7 @@
 🐜 AntsArmageddon — Servidor
 👥 Integrantes del grupo
 
-Facundo Adolfo O'Conell
+Facundo Adolfo Oconnell
 
 Ezequiel García Latorre
 
