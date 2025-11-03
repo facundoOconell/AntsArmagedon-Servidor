@@ -86,6 +86,39 @@ public final class GestorTurno {
         }
     }
 
+    public void avanzarTurno() {
+        if (enTransicion) {
+            // Si ya está en transición, no hacemos nada.
+            return;
+        }
+
+        // Finalizar turno actual
+        Personaje saliente = jugadores.get(turnoActual).getPersonajeActivo();
+        saliente.setEnTurno(false);
+        saliente.reiniciarTurno();
+
+        // Avanzar índice de turno
+        turnoActual++;
+        if (turnoActual >= jugadores.size()) {
+            turnoActual = 0;
+        }
+
+        // Pasar al siguiente jugador
+        Jugador siguiente = jugadores.get(turnoActual);
+        siguiente.avanzarPersonaje();
+
+        Personaje entrante = siguiente.getPersonajeActivo();
+        entrante.setEnTurno(true);
+        entrante.reiniciarTurno();
+
+        // Reiniciar tiempo
+        tiempoActual = TIEMPO_POR_TURNO;
+        enTransicion = false;
+        tiempoTransicion = 0f;
+
+        System.out.println("[GestorTurno] Cambio forzado de turno -> Jugador " + (turnoActual + 1));
+    }
+
     public Jugador getJugadorActivo() { return jugadores.get(turnoActual); }
     public int getTurnoActual() { return this.turnoActual; }
     public float getTiempoActual() { return this.tiempoActual; }

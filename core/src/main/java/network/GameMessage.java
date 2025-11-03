@@ -2,8 +2,6 @@ package network;
 
 import java.util.Arrays;
 
-
-
 public final class GameMessage {
 
     private final String type;

@@ -160,6 +160,10 @@ public final class GestorJuego {
         }
     }
 
+    public void cambiarTurno() {
+        gestorTurno.avanzarTurno();
+    }
+
     public void agregarEntidad(Entidad entidad) {
         gestorEntidades.agregarEntidad(entidad);
     }

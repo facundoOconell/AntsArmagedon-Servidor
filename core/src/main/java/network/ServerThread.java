@@ -7,6 +7,181 @@ import java.net.*;
 import java.util.ArrayList;
 import java.util.Random;
 
+public class ServerThread extends Thread {
+
+    private DatagramSocket socket;
+    private final int serverPort = 5555;
+    private boolean end = false;
+
+    private static final int MAX_CLIENTS = 2;
+    private int connectedClients = 0;
+    private final ArrayList<Client> clients = new ArrayList<>();
+
+    private final GameController gameController;
+
+    private ConfiguracionPartida configJ1;
+    private ConfiguracionPartida configJ2;
+
+    public ServerThread(GameController gameController) {
+        this.gameController = gameController;
+
+        try {
+            socket = new DatagramSocket(serverPort);
+            socket.setBroadcast(true);
+            System.out.println("[SERVIDOR] Iniciado en puerto " + serverPort);
+        } catch (SocketException e) {
+            System.err.println("[SERVIDOR] Error iniciando servidor UDP: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void run() {
+        while (!end) {
+            try {
+                DatagramPacket packet = new DatagramPacket(new byte[1024], 1024);
+                socket.receive(packet);
+                processMessage(packet);
+            } catch (IOException ignored) {}
+        }
+        System.out.println("[SERVIDOR] Hilo detenido.");
+    }
+
+    private void processMessage(DatagramPacket packet) {
+        GameMessage msg = new GameMessage(new String(packet.getData(), 0, packet.getLength()).trim());
+        int index = findClientIndex(packet);
+
+        switch (msg.getType()) {
+            case "CONNECT" -> manejarConexion(packet, index);
+            case "CONFIG" -> { if (index != -1) manejarConfiguracion(clients.get(index), msg); }
+            case "MOVE" -> { if (index != -1) gameController.mover(clients.get(index).getNum(), msg.getFloatArg(0, 0f)); }
+            case "JUMP" -> { if (index != -1) gameController.saltar(clients.get(index).getNum()); }
+            case "AIM" -> { if (index != -1) gameController.apuntar(clients.get(index).getNum(), msg.getIntArg(0, 0)); }
+            case "SHOOT" -> {
+                if (index != -1)
+                    gameController.disparar(
+                        clients.get(index).getNum(),
+                        msg.getFloatArg(0, 0f),
+                        msg.getFloatArg(1, 0f)
+                    );
+            }
+            case "CHANGE_WEAPON" -> { if (index != -1) gameController.cambiarMovimiento(clients.get(index).getNum(), msg.getIntArg(0, 0)); }
+            case "USE" -> { if (index != -1) gameController.usarMovimiento(clients.get(index).getNum()); }
+            case "TIMEOUT" -> gameController.timeOut();
+            default -> System.out.println("[SERVIDOR] Mensaje desconocido: " + msg);
+        }
+    }
+
+    private void manejarConexion(DatagramPacket packet, int index) {
+        InetAddress ip = packet.getAddress();
+        int port = packet.getPort();
+
+        if (index != -1) {
+            sendMessage("AlreadyConnected", ip, port);
+            return;
+        }
+
+        if (connectedClients >= MAX_CLIENTS) {
+            sendMessage("Full", ip, port);
+            return;
+        }
+
+        connectedClients++;
+        Client newClient = new Client(connectedClients, ip, port);
+        clients.add(newClient);
+
+        sendMessage("Connected:" + connectedClients, ip, port);
+        System.out.println("[SERVIDOR] Cliente #" + connectedClients + " conectado (" + ip + ":" + port + ")");
+
+        if (connectedClients == MAX_CLIENTS) {
+            sendMessageToAll("Start");
+            System.out.println("[SERVIDOR] Ambos jugadores conectados. Esperando configuraciones...");
+        }
+    }
+
+    private void manejarConfiguracion(Client client, GameMessage msg) {
+        ConfiguracionPartida config = ConfiguracionPartida.desdeString(msg.getArg(0));
+
+        if (client.getNum() == 1) {
+            configJ1 = config;
+            System.out.println("[SERVIDOR] Recibida configuración del Jugador 1.");
+        } else {
+            configJ2 = config;
+            System.out.println("[SERVIDOR] Recibida configuración del Jugador 2.");
+        }
+
+        if (configJ1 != null && configJ2 != null) {
+            System.out.println("[SERVIDOR] Ambas configuraciones recibidas. Iniciando partida sincronizada...");
+
+            ConfiguracionPartida finalConfig = fusionarConfiguraciones(configJ1, configJ2);
+            sendMessageToAll("StartGame:" + finalConfig.toNetworkString());
+
+            System.out.println("[SERVIDOR] Configuración final enviada a los clientes: " +
+                finalConfig.toNetworkString());
+            System.out.println("[SERVIDOR] El servidor no inicia partida local (modo dedicado).");
+        }
+    }
+
+    private ConfiguracionPartida fusionarConfiguraciones(ConfiguracionPartida c1, ConfiguracionPartida c2) {
+        ConfiguracionPartida finalC = new ConfiguracionPartida();
+        Random r = new Random();
+
+        finalC.setMapa(r.nextBoolean() ? c1.getIndiceMapa() : c2.getIndiceMapa());
+        finalC.setTiempoTurnoPorIndice(buscarIndiceTiempo(r.nextBoolean() ? c1.getTiempoTurno() : c2.getTiempoTurno()));
+        finalC.setFrecuenciaPowerUpsPorIndice(buscarIndiceFrecuencia(r.nextBoolean() ? c1.getFrecuenciaPowerUps() : c2.getFrecuenciaPowerUps()));
+
+        finalC.getEquipoJugador1().addAll(c1.getEquipoJugador1());
+        finalC.getEquipoJugador2().addAll(c2.getEquipoJugador2());
+        return finalC;
+    }
+
+    public void sendMessage(String message, InetAddress clientIp, int clientPort) {
+        try {
+            byte[] data = message.getBytes();
+            socket.send(new DatagramPacket(data, data.length, clientIp, clientPort));
+        } catch (IOException e) {
+            System.err.println("[SERVIDOR] Error al enviar mensaje: " + e.getMessage());
+        }
+    }
+
+    public void sendMessageToAll(String message) {
+        for (Client c : clients)
+            sendMessage(message, c.getIp(), c.getPort());
+    }
+
+    private int findClientIndex(DatagramPacket packet) {
+        String id = packet.getAddress().toString() + ":" + packet.getPort();
+        for (int i = 0; i < clients.size(); i++)
+            if (clients.get(i).getId().equals(id)) return i;
+        return -1;
+    }
+
+    public void terminate() {
+        end = true;
+        socket.close();
+        interrupt();
+    }
+
+    public void disconnectClients() {
+        sendMessageToAll("Disconnect");
+        clients.clear();
+        connectedClients = 0;
+    }
+
+    private int buscarIndiceTiempo(int tiempo) {
+        for (int i = 0; i < ConfiguracionPartida.OPCIONES_TIEMPO_TURNO.length; i++) {
+            if (ConfiguracionPartida.OPCIONES_TIEMPO_TURNO[i] == tiempo) return i;
+        }
+        return 0;
+    }
+
+    private int buscarIndiceFrecuencia(int freq) {
+        for (int i = 0; i < ConfiguracionPartida.OPCIONES_FRECUENCIA_PU.length; i++) {
+            if (ConfiguracionPartida.OPCIONES_FRECUENCIA_PU[i] == freq) return i;
+        }
+        return 0;
+    }
+}
+
 /*
 Conceptos de redes:
 
@@ -71,243 +246,3 @@ DatagramPacket {
  */
 
 /*Arreglar despuues, para que la partida solo empiece cuando ambos jugadores enviaron su  config.*/
-
-public class ServerThread extends Thread {
-
-    private DatagramSocket socket;
-    private final int serverPort = 5555;
-    private boolean end = false;
-    private static final int MAX_CLIENTS = 2;
-    private int connectedClients = 0;
-    private final ArrayList<Client> clients = new ArrayList<>();
-    private final GameController gameController;
-
-    private ConfiguracionPartida configJ1;
-    private ConfiguracionPartida configJ2;
-
-    public ServerThread(GameController gameController) {
-        this.gameController = gameController;
-        try {
-            socket = new DatagramSocket(serverPort);
-            System.out.println("[Servidor] Iniciado en puerto " + serverPort);
-        } catch (SocketException e) {
-            System.err.println("No se pudo iniciar el servidor UDP en puerto " + serverPort);
-        }
-    }
-
-    @Override
-    public void run() {
-        while (!end) {
-            try {
-                DatagramPacket packet = new DatagramPacket(new byte[1024], 1024);
-                socket.receive(packet);
-                processMessage(packet);
-            } catch (IOException ignored) {}
-        }
-    }
-
-    private void processMessage(DatagramPacket packet) {
-        GameMessage msg = new GameMessage(new String(packet.getData(), 0, packet.getLength()).trim());
-        int index = findClientIndex(packet);
-        System.out.println("[Servidor] Mensaje recibido: " + msg);
-
-        if (msg.getType().equals("Connect")) {
-            manejarConexion(packet, index);
-            return;
-        }
-
-        if (index == -1) {
-            sendMessage(GameMessage.of("NotConnected"), packet.getAddress(), packet.getPort());
-            return;
-        }
-
-        Client client = clients.get(index);
-
-        switch (msg.getType()) {
-            case "Config": manejarConfiguracion(client, msg); break;
-
-            case "Move": gameController.mover(client.getNum(), msg.getFloatArg(0, 0f)); break;
-
-            case "Jump": gameController.saltar(client.getNum()); break;
-
-            case "Aim": gameController.apuntar(client.getNum(), msg.getIntArg(0, 0)); break;
-
-            case "Shoot":
-                gameController.disparar(
-                    client.getNum(),
-                    msg.getFloatArg(0, 0f),
-                    msg.getFloatArg(1, 0f)
-                );
-                break;
-
-            case "ChangeWeapon": gameController.cambiarMovimiento(client.getNum(), msg.getIntArg(0, 0)); break;
-
-            case "Use": gameController.usarMovimiento(client.getNum()); break;
-
-            case "TimeOut": gameController.timeOut(); break;
-
-            default: System.out.println("[Servidor] Mensaje desconocido: " + msg);
-        }
-    }
-
-    private void manejarConexion(DatagramPacket packet, int index) {
-        InetAddress ip = packet.getAddress();
-        int port = packet.getPort();
-
-        if (index != -1) {
-            sendMessage(GameMessage.of("AlreadyConnected"), ip, port);
-            return;
-        }
-
-        if (connectedClients >= MAX_CLIENTS) {
-            sendMessage(GameMessage.of("Full"), ip, port);
-            return;
-        }
-
-        connectedClients++;
-        Client newClient = new Client(connectedClients, ip, port);
-        clients.add(newClient);
-
-        sendMessage(GameMessage.of("Connected", connectedClients), ip, port);
-        System.out.println("[Servidor] Cliente " + connectedClients + " conectado.");
-
-        if (connectedClients == MAX_CLIENTS) {
-            sendMessageToAll(GameMessage.of("WaitingConfig"));
-        }
-    }
-
-    private void manejarConfiguracion(Client client, GameMessage msg) {
-        ConfiguracionPartida config = parseConfig(msg.getArgs());
-        if (client.getNum() == 1) configJ1 = config;
-        else configJ2 = config;
-
-        System.out.println("[Servidor] Recibida configuración de jugador " + client.getNum());
-
-        if (configJ1 != null && configJ2 != null) {
-            ConfiguracionPartida finalConfig = fusionarConfiguraciones(configJ1, configJ2);
-            System.out.println("[Servidor] Configuración final decidida. Enviando a clientes...");
-
-            String configMsg = buildConfigMessage(finalConfig);
-            sendMessageToAll(GameMessage.of("StartGame", configMsg));
-
-            gameController.startGame(finalConfig);
-        }
-    }
-
-    private ConfiguracionPartida parseConfig(String[] parts) {
-        ConfiguracionPartida config = new ConfiguracionPartida();
-        try {
-            if (parts.length > 0) config.setMapa(Integer.parseInt(parts[0]));
-            if (parts.length > 1) config.setTiempoTurnoPorIndice(Integer.parseInt(parts[1]));
-            if (parts.length > 2) config.setFrecuenciaPowerUpsPorIndice(Integer.parseInt(parts[2]));
-
-            if (parts.length > 3) {
-                String[] hormigas = parts[3].split(",");
-                int jugador = (connectedClients == 1) ? 1 : 2;
-                for (int i = 0; i < hormigas.length; i++) {
-                    String tipo = hormigas[i].trim();
-                    if (!tipo.isEmpty())
-                        config.setHormiga(jugador, i, buscarIndiceHormiga(tipo));
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("[Servidor] Error al parsear configuración: " + e.getMessage());
-        }
-        return config;
-    }
-
-    private int buscarIndiceHormiga(String tipo) {
-        for (int i = 0; i < ConfiguracionPartida.TIPOS_HORMIGAS.length; i++) {
-            if (ConfiguracionPartida.TIPOS_HORMIGAS[i].equals(tipo)) return i;
-        }
-        return 0;
-    }
-
-    private ConfiguracionPartida fusionarConfiguraciones(ConfiguracionPartida c1, ConfiguracionPartida c2) {
-        ConfiguracionPartida finalC = new ConfiguracionPartida();
-        Random r = new Random();
-
-        finalC.setMapa(r.nextBoolean() ? c1.getIndiceMapa() : c2.getIndiceMapa());
-        finalC.setTiempoTurnoPorIndice(buscarIndiceTiempo(
-            r.nextBoolean() ? c1.getTiempoTurno() : c2.getTiempoTurno()));
-        finalC.setFrecuenciaPowerUpsPorIndice(buscarIndiceFrecuencia(
-            r.nextBoolean() ? c1.getFrecuenciaPowerUps() : c2.getFrecuenciaPowerUps()));
-
-        finalC.getEquipoJugador1().addAll(c1.getEquipoJugador1());
-        finalC.getEquipoJugador2().addAll(c2.getEquipoJugador2());
-
-        return finalC;
-    }
-
-    private int buscarIndiceTiempo(int tiempo) {
-        for (int i = 0; i < ConfiguracionPartida.OPCIONES_TIEMPO_TURNO.length; i++)
-            if (ConfiguracionPartida.OPCIONES_TIEMPO_TURNO[i] == tiempo) return i;
-        return 0;
-    }
-
-    private int buscarIndiceFrecuencia(int freq) {
-        for (int i = 0; i < ConfiguracionPartida.OPCIONES_FRECUENCIA_PU.length; i++)
-            if (ConfiguracionPartida.OPCIONES_FRECUENCIA_PU[i] == freq) return i;
-        return 0;
-    }
-
-    private String buildConfigMessage(ConfiguracionPartida config) {
-        String equipo1 = String.join(",", config.getEquipoJugador1());
-        String equipo2 = String.join(",", config.getEquipoJugador2());
-        return config.getIndiceMapa() + ":" +
-            obtenerIndiceTiempo(config.getTiempoTurno()) + ":" +
-            obtenerIndiceFrecuencia(config.getFrecuenciaPowerUps()) + ":" +
-            equipo1 + ":" + equipo2;
-    }
-
-    private int obtenerIndiceTiempo(int tiempo) {
-        for (int i = 0; i < ConfiguracionPartida.OPCIONES_TIEMPO_TURNO.length; i++)
-            if (ConfiguracionPartida.OPCIONES_TIEMPO_TURNO[i] == tiempo) return i;
-        return 0;
-    }
-
-    private int obtenerIndiceFrecuencia(int frecuencia) {
-        for (int i = 0; i < ConfiguracionPartida.OPCIONES_FRECUENCIA_PU.length; i++)
-            if (ConfiguracionPartida.OPCIONES_FRECUENCIA_PU[i] == frecuencia) return i;
-        return 0;
-    }
-
-    public void sendMessage(GameMessage msg, InetAddress clientIp, int clientPort) {
-        sendMessage(msg.toPacketString(), clientIp, clientPort);
-    }
-
-    public void sendMessage(String message, InetAddress clientIp, int clientPort) {
-        byte[] byteMessage = message.getBytes();
-        DatagramPacket packet = new DatagramPacket(byteMessage, byteMessage.length, clientIp, clientPort);
-        try {
-            socket.send(packet);
-        } catch (IOException e) {
-            System.err.println("[Servidor] Error al enviar mensaje: " + e.getMessage());
-        }
-    }
-
-    public void sendMessageToAll(GameMessage msg) {
-        for (Client client : clients)
-            sendMessage(msg, client.getIp(), client.getPort());
-    }
-
-    public void terminate() {
-        end = true;
-        socket.close();
-        interrupt();
-    }
-
-    public void disconnectClients() {
-        for (Client client : clients)
-            sendMessage(GameMessage.of("Disconnect"), client.getIp(), client.getPort());
-        clients.clear();
-        connectedClients = 0;
-    }
-
-    private int findClientIndex(DatagramPacket packet) {
-        String id = packet.getAddress().toString() + ":" + packet.getPort();
-        for (int i = 0; i < clients.size(); i++)
-            if (clients.get(i).getId().equals(id)) return i;
-        return -1;
-    }
-}

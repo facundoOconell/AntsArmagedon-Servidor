@@ -7,6 +7,16 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [0.0.1] - 2025-11-3
+
+# Added
+- Clase lobby para esperar las configuraciones de los clientes.
+- Eventos de GameController del juego.
+
+### Changed
+- Los antiguos eventos a nuevos eventos correspondientes al juego.
+- Mensajes de red para saber que esta pasando en la parte red.
+
 ## [0.0.0] - 2025-11-1
 
 # Added

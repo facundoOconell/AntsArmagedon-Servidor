@@ -4,15 +4,19 @@ import partida.ConfiguracionPartida;
 
 public interface GameController {
 
-    void startGame(ConfiguracionPartida configuracionPartida);
-    void mover(int numPlayer, float dir);
-    void saltar(int numPlayer);
-    void apuntar(int numPlayer, int dir);
-    void disparar(int numPlayer, float angulo, float potencia);
-    void cambiarMovimiento(int numPlayer, int indiceMovimiento);
-    void usarMovimiento(int numPlayer);
+    void startGame(ConfiguracionPartida configFinal);
+
+    void mover(int numJugador, float direccion);
+    void saltar(int numJugador);
+    void apuntar(int numJugador, int direccion);
+    void disparar(int numJugador, float angulo, float potencia);
+    void cambiarMovimiento(int numJugador, int indiceMovimiento);
+    void usarMovimiento(int numJugador);
+
     void timeOut();
 
+    void sendToAll(String message);
+    void sendToPlayer(int numJugador, String message);
 }
 
 /*
